@@ -54,6 +54,36 @@ function loadProxies() {
     }
 }
 
+function loadWallets() {
+    try {
+        if (fs.existsSync('wallets.txt')) {
+            const walletData = fs.readFileSync('wallets.txt', 'utf8')
+                .split('------------------------')
+                .map(block => block.trim())
+                .filter(block => block);
+            
+            return walletData.map(block => {
+                const addressMatch = block.match(/Address: (.+)/);
+                const privateKeyMatch = block.match(/Private Key: (.+)/);
+                const tokenMatch = block.match(/Token: (.+)/);
+                
+                if (addressMatch && privateKeyMatch && tokenMatch) {
+                    return {
+                        address: addressMatch[1],
+                        privateKey: privateKeyMatch[1],
+                        token: tokenMatch[1]
+                    };
+                }
+                return null;
+            }).filter(wallet => wallet !== null);
+        }
+        return [];
+    } catch (error) {
+        console.error('⚠️ Error loading wallets:', error.message);
+        return [];
+    }
+}
+
 function createAxiosInstance(proxy = null) {
     const config = {
         timeout: 30000,
@@ -431,42 +461,40 @@ async function processWalletAndTasks(wallet, inviteCode, outputStream, index, to
 
 async function main() {
     try {
-        console.log('🎵 Auto Gen + Auto Task 🎵');
+        console.log('🎵 Auto Task using existing wallets 🎵');
         console.log('-----------------------------------------------------');
-        
-        const numWallets = parseInt(await question('How many wallets do you want to generate? '));
-        if (isNaN(numWallets) || numWallets <= 0) {
-            console.log('❌ Please enter a valid number greater than 0.');
+
+        const wallets = loadWallets();
+        if (wallets.length === 0) {
+            console.log('❌ No wallets found in wallets.txt');
             process.exit(1);
         }
 
-        console.log(`\n🔄 Generating ${numWallets} wallets...`);
+        console.log(`📂 Loaded ${wallets.length} wallets.`);
 
-        // Load proxies from file
-        const proxies = loadProxies();
-        console.log(`📡 Loaded ${proxies.length} proxies from proxy.txt`);
-
-        const outputStream = fs.createWriteStream('generated_wallets.txt', { flags: 'a' });
-        let successCount = 0;
-
-        for (let i = 0; i < numWallets; i++) {
-            const wallet = await generateWallet();
-            // Get proxy for this wallet (round-robin)
-            const proxy = proxies.length > 0 ? proxies[i % proxies.length] : null;
+        const batchSize = 10; 
+        for (let i = 0; i < wallets.length; i += batchSize) {
+            console.log(`
+🚀 Running batch: Wallets ${i + 1} to ${Math.min(i + batchSize, wallets.length)}`);
             
-            const success = await processWalletAndTasks(wallet, "fireverse", outputStream, i, numWallets, proxy);
-            if (success) successCount++;
-
-            if (i < numWallets - 1) {
-                console.log('\n⏳ Waiting 3 seconds before next wallet...');
-                await new Promise(resolve => setTimeout(resolve, 3000));
-            }
+            const batchPromises = wallets.slice(i, i + batchSize).map((wallet, index) => {
+                console.log(`
+🔄 Processing wallet ${i + index + 1}/${wallets.length}`);
+                console.log('📝 Address:', wallet.address);
+                
+                const bot = new FireverseMusicBot(wallet.token, i + index + 1);
+                return bot.initialize().then(success => {
+                    if (success) {
+                        console.log('🎵 Starting music tasks...');
+                        return bot.performTasks();
+                    }
+                });
+            });
+            
+            await Promise.all(batchPromises);
         }
 
-        outputStream.end();
-        console.log(`\n✨ Complete! Successfully generated ${successCount}/${numWallets} wallets`);
-        console.log('📝 Check generated_wallets.txt for wallet information');
-        
+        console.log('\n🎉 All tasks completed!');
         process.exit(0);
     } catch (error) {
         console.error('❌ Fatal error:', error);
@@ -475,6 +503,7 @@ async function main() {
         rl.close();
     }
 }
+
 
 // Start the program
 main().catch(console.error);
